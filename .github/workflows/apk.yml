@@ -1,0 +1,78 @@
+name: Build Antonelly TV APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    env:
+      ATV_SUPABASE_URL: ${{ secrets.ATV_SUPABASE_URL }}
+      ATV_PUBLISHABLE_KEY: ${{ secrets.ATV_PUBLISHABLE_KEY }}
+      ATV_MEDIA_BUCKET: tv-media
+      ATV_UPDATE_MANIFEST_URL: ${{ secrets.ATV_UPDATE_MANIFEST_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Localizar projeto Android
+        shell: bash
+        run: |
+          BUILD_FILE=$(find . -type f -path '*/app/build.gradle' | head -n1)
+          test -n "$BUILD_FILE" || (echo "app/build.gradle não encontrado no repositório" && find . -maxdepth 3 -type f | sort && exit 1)
+          PROJECT_DIR=$(dirname "$(dirname "$BUILD_FILE")")
+          PROJECT_DIR=${PROJECT_DIR#./}
+          if [ -z "$PROJECT_DIR" ]; then PROJECT_DIR="."; fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Projeto Android localizado em: $PROJECT_DIR"
+
+      - name: Ler versão do app
+        shell: bash
+        run: |
+          BUILD_FILE="$PROJECT_DIR/app/build.gradle"
+          VERSION_NAME=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" "$BUILD_FILE" | head -n1)
+          VERSION_CODE=$(sed -n 's/.*versionCode \([0-9][0-9]*\).*/\1/p' "$BUILD_FILE" | head -n1)
+          test -n "$VERSION_NAME" || (echo "versionName não encontrado em $BUILD_FILE" && exit 1)
+          test -n "$VERSION_CODE" || (echo "versionCode não encontrado em $BUILD_FILE" && exit 1)
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "Versão: $VERSION_NAME ($VERSION_CODE)"
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" "dist/Antonelly-TV-v${VERSION_NAME}-debug.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Antonelly-TV-debug-apk
+          path: dist/*.apk
+          retention-days: 30
